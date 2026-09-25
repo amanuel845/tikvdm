@@ -39,11 +39,6 @@ function fetchUrl(urlStr, redirects = 0) {
         return;
       }
 
-      if (res.statusCode !== 200) {
-        reject(new Error(`Request failed with status ${res.statusCode}`));
-        return;
-      }
-
       let stream = res;
       const encoding = res.headers['content-encoding'];
       if (encoding === 'gzip') stream = res.pipe(zlib.createGunzip());
@@ -55,7 +50,7 @@ function fetchUrl(urlStr, redirects = 0) {
       stream.on('data', (chunk) => body += decoder.write(chunk));
       stream.on('end', () => {
         body += decoder.end();
-        resolve(body);
+        resolve({ status: res.statusCode, body });
       });
       stream.on('error', reject);
     });
@@ -71,7 +66,6 @@ function extractFromHtml(html) {
       name: '__UNIVERSAL_DATA_FOR_REHYDRATION__',
       regex: /<script[^>]*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/,
       parser: (data) => data?.['__DEFAULT_SCOPE__']?.['webapp.video-detail']?.itemInfo?.itemStruct,
-      canonicalParser: (data) => data?.['__DEFAULT_SCOPE__']?.['seo.abtest']?.canonical || null,
     },
     {
       name: 'SIGI_STATE',
@@ -82,7 +76,6 @@ function extractFromHtml(html) {
         const id = Object.keys(vm)[0];
         return id ? vm[id] : null;
       },
-      canonicalParser: (data) => null,
     },
   ];
 
@@ -115,7 +108,6 @@ function extractFromHtml(html) {
 
       const video = {
         id: item.id || null,
-        canonicalUrl: null,
         cover: item.video?.cover || item.video?.originCover || null,
         stats: item.statsV2 ? {
           diggCount: parseInt(item.statsV2.diggCount || '0'),
@@ -140,13 +132,6 @@ function extractFromHtml(html) {
         qualities: [],
         downloadUrl: null,
       };
-
-      const canonical = pattern.canonicalParser ? pattern.canonicalParser(json) : null;
-      if (canonical) {
-        video.canonicalUrl = canonical;
-      } else if (video.id && a.uniqueId) {
-        video.canonicalUrl = `https://www.tiktok.com/@${a.uniqueId}/video/${video.id}`;
-      }
 
       if (item.video?.bitrateInfo && item.video.bitrateInfo.length > 0) {
         for (const info of item.video.bitrateInfo) {
@@ -183,6 +168,14 @@ function extractFromHtml(html) {
   return null;
 }
 
+function buildCandidates(videoId) {
+  return [
+    `https://www.tiktok.com/@i/video/${videoId}`,
+    `https://www.tiktok.com/@a/video/${videoId}`,
+    `https://www.tiktok.com/embed/v2/${videoId}`,
+  ];
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -211,26 +204,51 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const targetUrl = `https://www.tiktok.com/embed/v2/${videoId}`;
+  const candidates = buildCandidates(videoId);
+  const attempts = [];
 
   try {
-    const html = await fetchUrl(targetUrl);
-    const data = extractFromHtml(html);
+    for (const targetUrl of candidates) {
+      let result;
+      try {
+        result = await fetchUrl(targetUrl);
+      } catch (err) {
+        attempts.push({ url: targetUrl, error: err.message });
+        continue;
+      }
 
-    if (!data) {
-      res.statusCode = 404;
+      if (result.status !== 200) {
+        attempts.push({
+          url: targetUrl,
+          status: result.status,
+          snippet: result.body.slice(0, 120),
+        });
+        continue;
+      }
+
+      const data = extractFromHtml(result.body);
+      if (!data) {
+        attempts.push({ url: targetUrl, status: 200, error: 'parsed but no data' });
+        continue;
+      }
+
+      const fetchedAt = new Date().toISOString();
+      res.statusCode = 200;
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: 'Video data not found' }));
+      res.end(JSON.stringify({
+        author: data.author,
+        video: [{ ...data.video, fetchedAt }],
+        source: targetUrl,
+      }));
       return;
     }
 
-    const fetchedAt = new Date().toISOString();
-    res.statusCode = 200;
+    res.statusCode = 502;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
-      author: data.author,
-      video: [{ ...data.video, fetchedAt }],
-      source: targetUrl,
+      error: 'All TikTok endpoints failed',
+      videoId,
+      attempts,
     }));
   } catch (error) {
     console.error('Error:', error.message);
