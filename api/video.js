@@ -3,6 +3,19 @@ const { URL } = require('url');
 const zlib = require('zlib');
 const { StringDecoder } = require('string_decoder');
 
+// TikTok sometimes serves description text as UTF-8 bytes interpreted
+// as Latin-1. This reverses that when detected.
+function fixMojibake(str) {
+  if (!str || typeof str !== 'string') return str;
+  if (!/[ÃÂðáŠ]/.test(str)) return str;
+  try {
+    const repaired = Buffer.from(str, 'latin1').toString('utf8');
+    return /[ÃÂðáŠ]/.test(repaired) ? str : repaired;
+  } catch {
+    return str;
+  }
+}
+
 function fetchUrl(urlStr, redirects = 0) {
   return new Promise((resolve, reject) => {
     if (redirects > 10) {
