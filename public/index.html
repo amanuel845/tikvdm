@@ -971,13 +971,7 @@
               </svg>
             </button>
           </div>
-          <div id="detailCanonicalRow" class="detail-row" style="display:none;">
-            <span>Canonical URL</span>
-            <span style="display:flex; gap:8px; align-items:center;">
-              <a id="canonicalLink" href="#" target="_blank" style="color:var(--accent); text-decoration:none;">Open</a>
-              <button id="copyCanonicalBtn" style="background:none;border:none;color:var(--accent);cursor:pointer;padding:0;">Copy</button>
-            </span>
-          </div>
+          
           <div class="detail-row" style="display:none!important">
             <span>secUid</span>
             <span id="secUid" style="word-break:break-all;">--</span>
@@ -1046,9 +1040,6 @@
   const detailCreated = document.getElementById('detailCreated');
   const detailDescRow = document.getElementById('detailDescRow');
   const detailDesc = document.getElementById('detailDesc');
-  const detailCanonicalRow = document.getElementById('detailCanonicalRow');
-  const canonicalLink = document.getElementById('canonicalLink');
-  const copyCanonicalBtn = document.getElementById('copyCanonicalBtn');
   const secUid = document.getElementById('secUid');
   const statViews = document.getElementById('statViews');
   const statLikes = document.getElementById('statLikes');
@@ -1429,13 +1420,7 @@
       detailDescRow.style.display = 'none';
     }
 
-    if (video.canonicalUrl) {
-      detailCanonicalRow.style.display = 'flex';
-      canonicalLink.href = video.canonicalUrl;
-      copyCanonicalBtn.onclick = () => copyText(video.canonicalUrl);
-    } else {
-      detailCanonicalRow.style.display = 'none';
-    }
+    
 
     const stats = video.stats || {};
     statViews.textContent = formatK(stats.playCount);
