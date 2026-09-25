@@ -3,19 +3,6 @@ const { URL } = require('url');
 const zlib = require('zlib');
 const { StringDecoder } = require('string_decoder');
 
-// TikTok sometimes serves description text as UTF-8 bytes interpreted
-// as Latin-1. This reverses that when detected.
-function fixMojibake(str) {
-  if (!str || typeof str !== 'string') return str;
-  if (!/[ÃÂðáŠ]/.test(str)) return str;
-  try {
-    const repaired = Buffer.from(str, 'latin1').toString('utf8');
-    return /[ÃÂðáŠ]/.test(repaired) ? str : repaired;
-  } catch {
-    return str;
-  }
-}
-
 function fetchUrl(urlStr, redirects = 0) {
   return new Promise((resolve, reject) => {
     if (redirects > 10) {
@@ -73,6 +60,29 @@ function fetchUrl(urlStr, redirects = 0) {
   });
 }
 
+// --- Unavailable detection ---------------------------------------------
+// TikTok serves a 200 stub page with one of these phrases when the
+// requested video is removed, private, region-locked, or does not exist.
+const UNAVAILABLE_PATTERNS = [
+  /Video currently unavailable/i,
+  /This video is unavailable/i,
+  /Video is unavailable/i,
+  /Video not available/i,
+  /This post is unavailable/i,
+  /Couldn't find this video/i,
+  /Couldn't find this post/i,
+  /Video is private/i,
+  /This video is private/i,
+  /page is not available/i,
+  /Something went wrong/i,
+];
+
+function detectUnavailable(html) {
+  if (!html || typeof html !== 'string') return false;
+  return UNAVAILABLE_PATTERNS.some(re => re.test(html));
+}
+
+// --- Extraction --------------------------------------------------------
 function extractFromHtml(html) {
   const patterns = [
     {
@@ -141,7 +151,7 @@ function extractFromHtml(html) {
         duration: item.video?.duration || null,
         videoSize: item.video?.size || item.video?.PlayAddrStruct?.DataSize || (item.video?.bitrateInfo?.[0]?.PlayAddr?.DataSize) || null,
         createTime: item.createTime || null,
-        description: fixMojibake(item.desc || item.description || ''),
+        description: item.desc || item.description || '',
         qualities: [],
         downloadUrl: null,
       };
@@ -189,6 +199,7 @@ function buildCandidates(videoId) {
   ];
 }
 
+// --- Handler -----------------------------------------------------------
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -219,6 +230,7 @@ module.exports = async function handler(req, res) {
 
   const candidates = buildCandidates(videoId);
   const attempts = [];
+  let sawUnavailableStub = false;
 
   try {
     for (const targetUrl of candidates) {
@@ -231,31 +243,49 @@ module.exports = async function handler(req, res) {
       }
 
       if (result.status !== 200) {
-        attempts.push({
-          url: targetUrl,
-          status: result.status,
-          snippet: result.body.slice(0, 120),
-        });
+        attempts.push({ url: targetUrl, status: result.status });
         continue;
       }
 
       const data = extractFromHtml(result.body);
-      if (!data) {
-        attempts.push({ url: targetUrl, status: 200, error: 'parsed but no data' });
-        continue;
+      if (data) {
+        // ---- success ----
+        const fetchedAt = new Date().toISOString();
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({
+          author: data.author,
+          video: [{ ...data.video, fetchedAt }],
+          source: targetUrl,
+        }));
+        return;
       }
 
-      const fetchedAt = new Date().toISOString();
-      res.statusCode = 200;
+      // 200 OK but no parseable data — check whether the page itself
+      // says the video is unavailable.
+      if (detectUnavailable(result.body)) {
+        sawUnavailableStub = true;
+        // Don't bother trying the remaining candidates — this is a
+        // definitive answer from TikTok.
+        break;
+      }
+
+      attempts.push({ url: targetUrl, status: 200, error: 'parsed but no data' });
+    }
+
+    // ---- definitive "unavailable" ----
+    if (sawUnavailableStub) {
+      res.statusCode = 404;
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({
-        author: data.author,
-        video: [{ ...data.video, fetchedAt }],
-        source: targetUrl,
+        error: 'Video is unavailable',
+        message: 'This TikTok video is not available. It may have been removed, made private, or region-locked.',
+        videoId,
       }));
       return;
     }
 
+    // ---- inconclusive: TikTok returned something we don't understand ----
     res.statusCode = 502;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
