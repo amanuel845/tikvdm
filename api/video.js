@@ -141,7 +141,7 @@ function extractFromHtml(html) {
         duration: item.video?.duration || null,
         videoSize: item.video?.size || item.video?.PlayAddrStruct?.DataSize || (item.video?.bitrateInfo?.[0]?.PlayAddr?.DataSize) || null,
         createTime: item.createTime || null,
-        description: item.desc || item.description || '',
+        description: fixMojibake(item.desc || item.description || ''),
         qualities: [],
         downloadUrl: null,
       };
