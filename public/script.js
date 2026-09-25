@@ -315,11 +315,14 @@ const SCRAPE_API = 'https://tikvdm.vercel.app/api/video';
    *  API call (single video, by ID)
    * --------------------------------------------------------- */
   async function fetchScrape(videoId) {
-    const response = await fetch(`${SCRAPE_API}?videoId=${encodeURIComponent(videoId)}`);
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || `Failed to fetch data (HTTP ${response.status})`);
-    return data;
+  const response = await fetch(`${SCRAPE_API}?videoId=${encodeURIComponent(videoId)}`);
+  const data = await response.json().catch(() => ({}));
+  if (response.status === 404) {
+    throw new Error(data.message || 'Video is unavailable');
   }
+  if (!response.ok) throw new Error(data.error || `Failed to fetch data (HTTP ${response.status})`);
+  return data;
+}
 
   async function fetchAllData(videoId) {
     showSkeleton();
